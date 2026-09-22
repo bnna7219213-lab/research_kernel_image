@@ -1,0 +1,43 @@
+# data
+/data/
+data/
+raw/
+clean/
+pretrained/
+outputs/
+eval/
+logs/
+runs/
+wandb/
+mlruns/
+coco/
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.bmp
+*.tiff
+*.gif
+!tests/**/*.png
+!tests/**/*.jpg
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# editors
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# k8s
+*k8s-secrets*.yaml

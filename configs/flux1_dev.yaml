@@ -1,0 +1,112 @@
+# ============================================================
+# Flux.1-dev Phase-A finetune config (8 × A100-80GB, FSDP)
+# License: Apache-2.0
+# Reference: https://github.com/black-forest-labs/flux
+# Usage:
+#   torchrun --nproc_per_node=8 src/train/main.py --config configs/flux1_dev.yaml
+# ============================================================
+name: flux1_dev_phase_a
+seed: 42
+output_dir: /data/t2image/runs/${name}
+
+# ---------- model ----------
+model:
+  name: flux1_dev
+  pretrained: /data/t2image/pretrained/FLUX.1-dev
+  dtype: bf16
+  resolution: 512
+  # For sanity finetune, freeze transformer, replace top/new layers
+  freeze_text_encoder: true
+  lora:
+    enabled: true     # 12B model — LoRA is strongly recommended for 8×A100-80
+    r: 16
+    alpha: 32
+    target_modules: ["to_q", "to_v", "to_k", "to_out.0", "add_q_proj", "add_v_proj"]
+
+# ---------- data ----------
+data:
+  train:
+    - type: csv_image
+      image_dir: /data/t2image/raw/laion_aesthetics
+      csv_path: /data/t2image/raw/laion_aesthetics/metadata.csv
+      csv_caption_column: caption
+      csv_id_column: id
+      ext: .jpg
+      resolution: 512
+      weight: 1.0
+    - type: dir_image
+      image_dir: /data/t2image/raw/journeydb
+      resolution: 512
+      weight: 0.3
+  val:
+    - type: csv_image
+      image_dir: /data/t2image/coco/val2014
+      csv_path: /data/t2image/coco/val2014_captions.csv
+      csv_caption_column: caption
+      csv_id_column: image_id
+      ext: .jpg
+      resolution: 512
+      weight: 1.0
+  num_workers: 16
+  prefetch_factor: 4
+  pin_memory: true
+  dataset_fingerprint:
+    - /data/t2image/_spec/laion_aesthetics.fingerprint.json
+
+# ---------- training ----------
+training:
+  max_steps: 20000        # 12B + LoRA, smaller but still meaningful
+  warmup_steps: 500
+  batch_size_per_gpu: 2   # 12B base → per-GPU smaller
+  grad_accum: 16
+  max_grad_norm: 1.0
+  adam:
+    lr: 1.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 0.0
+  scheduler: cosine
+  checkpoint_every: 2500
+  resume: true
+  log_every: 500
+  eval_every: 2500
+
+# ---------- flow matching ----------
+flow_matching:
+  # Flux uses rectified flow + logit-normal
+  objective: v_prediction
+  logit_normal:
+    enabled: true
+    mu: 0.0
+    sigma: 1.0
+  guidance_distill:
+    enabled: false       # enable once base LoRA stabilizes
+    target_steps: 4
+
+# ---------- distributed ----------
+distributed:
+  backend: nccl
+  fsdp: true
+  fsdp_sharding: full_shard
+  fsdp_mixed_precision: bf16
+  activation_checkpointing: true
+  compile: true
+
+# ---------- validation ----------
+inference:
+  num_prompts_per_eval: 16
+  guidance_scale: 3.5
+  num_steps: 50
+
+# ---------- logging ----------
+logging:
+  backend: wandb
+  project: t2image-phase-a
+  entity: t2image-team
+  log_dir: /data/t2image/logs/${name}
+
+# ---------- reproducibility ----------
+reproducibility:
+  deterministic_algorithms: false
+  benchmark_cudnn: true
+  sha256_lock: true

@@ -1,0 +1,113 @@
+# ============================================================
+# T2Image Phase-A 8×A100 training job (K8s; shared with T2Music)
+# ============================================================
+# Usage:
+#   kubectl apply -f k8s/submit_train.yaml
+#
+# NOTE: Shares the same K8s cluster / PV with research_kernel_music.
+# PriorityClass is lower (normal) than music's high, so when both are
+# pending, music takes priority. Adjust as needed.
+# ============================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: t2image-train-pixart
+  namespace: t2music
+  labels:
+    project: t2image
+    phase: a
+    model: pixart_sigma
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        project: t2image
+        job: train
+    spec:
+      restartPolicy: OnFailure
+      priorityClassName: t2image-normal  # vs. t2music-high — see priority.yaml
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      nodeSelector:
+        gpu-class: a100-80gb
+      containers:
+        - name: t2image-train
+          image: your-registry.io/t2image:phase-a   # ← CHANGE
+          imagePullPolicy: IfNotPresent
+          command: ["/workspace/docker/entrypoint.sh", "train-pixart"]
+          args: ["--config=/workspace/configs/pixart_sigma.yaml"]
+          env:
+            - name: MASTER_ADDR
+              value: "localhost"
+            - name: MASTER_PORT
+              value: "29500"
+            - name: NCCL_IB_DISABLE
+              value: "1"
+            - name: T2IMAGE_DATA_ROOT
+              value: "/data/t2image"
+            - name: WANDB_MODE
+              value: "offline"
+          resources:
+            limits:
+              cpu: "64"
+              memory: "512Gi"
+              nvidia.com/gpu: 8
+            requests:
+              cpu: "32"
+              memory: "256Gi"
+              nvidia.com/gpu: 8
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: t2image-pvc
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "32Gi"
+---
+# For 4-card fallback (graceful degradation when music task has priority)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: t2image-train-pixart-4card
+  namespace: t2music
+  labels:
+    project: t2image
+    phase: a
+    model: pixart_sigma
+    backup: "4card"
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      priorityClassName: t2image-lowest
+      containers:
+        - name: t2image-train
+          image: your-registry.io/t2image:phase-a
+          command: ["/workspace/docker/entrypoint.sh", "train-pixart"]
+          args: ["--config=/workspace/configs/pixart_sigma.yaml",
+                 "distributed.fsdp_sharding=shard_grad_op",
+                 "training.batch_size_per_gpu=16"]
+          resources:
+            limits:
+              nvidia.com/gpu: 4
+            requests:
+              nvidia.com/gpu: 4
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: t2image-pvc

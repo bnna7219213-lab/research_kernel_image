@@ -1,0 +1,124 @@
+# ============================================================
+# PixArt-Σ Phase-A training config (8 × A100-80GB, FSDP)
+# Reference: https://github.com/PixArt-alpha/PixArt-sigma (Adobe)
+# Usage:
+#   torchrun --nproc_per_node=8 src/train/main.py --config configs/pixart_sigma.yaml
+# ============================================================
+name: pixart_sigma_phase_a
+seed: 42
+output_dir: /data/t2image/runs/${name}
+
+# ---------- model ----------
+model:
+  name: pixart_sigma
+  pretrained: /data/t2image/pretrained/PixArt-Sigma-900M
+  # Distilled checkpoint available: mit-han-lab/dit-900m-0.5b-distill
+  vae_path: /data/t2image/pretrained/dc-ae-f8c8-1-0-2024
+  dtype: bf16
+  freeze_text_encoder: true   # freeze T5 for PoC; freeze/bias LoRA via text_encoder.lora
+  resolution: 512
+  lora:
+    enabled: false
+    r: 16
+    alpha: 32
+    target_modules: ["to_q", "to_v", "to_k", "to_out.0"]
+
+# ---------- data ----------
+data:
+  train:
+    - type: csv_image
+      image_dir: /data/t2image/raw/laion_aesthetics
+      csv_path: /data/t2image/raw/laion_aesthetics/metadata.csv
+      csv_caption_column: caption
+      csv_id_column: id
+      ext: .jpg
+      resolution: 512
+      weight: 1.0
+    - type: dir_image
+      image_dir: /data/t2image/raw/coyo_700m
+      resolution: 512
+      weight: 0.5
+    - type: dir_image
+      image_dir: /data/t2image/raw/journeydb
+      resolution: 512
+      weight: 0.3   # high aesthetic, smaller scale
+  val:
+    - type: csv_image
+      image_dir: /data/t2image/coco/val2014
+      csv_path: /data/t2image/coco/val2014_captions.csv
+      csv_caption_column: caption
+      csv_id_column: image_id
+      ext: .jpg
+      resolution: 512
+      weight: 1.0
+  num_workers: 16
+  prefetch_factor: 4
+  pin_memory: true
+  dataset_fingerprint:
+    - /data/t2image/_spec/laion_aesthetics.fingerprint.json
+    - /data/t2image/_spec/coco.fingerprint.json
+
+# ---------- training ----------
+training:
+  max_steps: 50000        # 3B model, 500k steps for full SOTA — PoC 50k
+  warmup_steps: 500
+  batch_size_per_gpu: 8
+  grad_accum: 4
+  max_grad_norm: 1.0
+  adam:
+    lr: 2.0e-5
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 0.01
+  scheduler: cosine
+  checkpoint_every: 5000
+  resume: true
+  log_every: 500
+  eval_every: 2500
+
+# ---------- flow matching ----------
+flow_matching:
+  # Flow matching / rectified flow (PixArt-Σ supports both)
+  objective: v_prediction
+  snr_gamma: 5.0   # Min-SNR weighting for faster convergence
+  repa:
+    enabled: true
+    backbone: dinov2_vitb14   # REPA semantic alignment
+    feature_index: -3
+    loss_weight: 0.05
+  ema:
+    enabled: true
+    decay: 0.9999
+    ema_warmup: 5000
+
+# ---------- distributed (FSDP-2, 8 × A100-80GB) ----------
+distributed:
+  backend: nccl
+  fsdp: true
+  fsdp_sharding: full_shard
+  fsdp_mixed_precision: bf16
+  activation_checkpointing: true
+  compile: true
+  cpu_offload: false
+
+# ---------- validation / generation ----------
+inference:
+  num_prompts_per_eval: 16
+  guidance_scale: 4.5
+  num_steps: 50   # distilled target: 4-8
+  calculate_fid: true
+  log_samples: 64
+
+# ---------- logging ----------
+logging:
+  backend: wandb
+  project: t2image-phase-a
+  entity: t2image-team
+  log_dir: /data/t2image/logs/${name}
+  save_code: true
+
+# ---------- reproducibility ----------
+reproducibility:
+  deterministic_algorithms: false
+  benchmark_cudnn: true
+  sha256_lock: true
